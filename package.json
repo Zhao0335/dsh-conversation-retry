@@ -1,6 +1,6 @@
 {
   "name": "dsh-conversation-retry",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "private": true,
   "type": "module",
   "description": "Retry a turn, edit the prompt and resend, or branch a new session from any completed turn in the DeepSeek Harness Web UI.",

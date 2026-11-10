@@ -86,6 +86,12 @@ window.__ModuleLoader__.load({
   font-size:12px;line-height:18px;max-width:220px;
   color:var(--dsw-alias-state-error-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
 }
+/**
+ * The user row stacks its children in a column: the message-source seat, the
+ * bubble, then the shipped action row. The chain slot only offers the first
+ * seat, so reorder this control after the action row to sit under the bubble.
+ */
+.dsh-conversation-retry-edit{order:1}
 `
 
     const styles = {
@@ -354,7 +360,7 @@ window.__ModuleLoader__.load({
         'button',
         {
           type: 'button',
-          className: ACTION_CLASS,
+          className: `${ACTION_CLASS} dsh-conversation-retry-edit`,
           title: label,
           'aria-label': label,
           onClick: () => publishEdit({ sessionId, seq: target.seq, draft: target.text, busy: false, error: null }),
