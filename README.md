@@ -1,8 +1,7 @@
 # dsh-conversation-retry
 
-Edit a message you already sent and re-run from there — plus retry a turn, and
-branch from any turn — in the
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web UI.
+Edit a message you already sent and re-run from there — plus retry a turn — in
+the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web UI.
 
 The stock Harness only lets you append another message when something goes
 wrong. A prompt you already sent is frozen: the bad answer stays in the history
@@ -11,12 +10,14 @@ and keeps costing context. This plugin makes the conversation editable.
 | Action | Where | What it does |
 | --- | --- | --- |
 | **Edit** | on your own message | Rewrite a prompt you already sent and re-run from that point. |
-| **Retry** | on a completed turn | Re-send the turn's prompt unchanged and let the model answer again. |
-| **Branch** | on a completed turn | Fork a new session that keeps the turn — for *any* turn, including older ones. |
+| **Retry** | in the assistant action strip | Re-send the turn's prompt unchanged and let the model answer again. |
 
-Every action produces a real, separate session: nothing is rewritten in place
-and nothing is lost. The original conversation is untouched, and the new branch
+Both actions produce a real, separate session: nothing is rewritten in place and
+nothing is lost. The original conversation is untouched, and the new branch
 appears in the sidebar like any other session.
+
+Branching a turn is *not* part of this plugin — the Chat footer already ships a
+branch button, so there is nothing to add.
 
 ## Why forks instead of in-place rewriting
 
@@ -44,7 +45,7 @@ module.
 
 Requirements: a Harness build that exposes `ctx.sessions.fork` with an `atSeq`
 boundary, the `conversation.chat.user.before` chain slot, and the
-`conversation.chat.turnTail` slot (0.2.x and later).
+`conversation.chat.assistant-actions` slot (0.2.x and later).
 
 ## Usage
 
@@ -54,12 +55,10 @@ press *Fork and send* (`Ctrl`/`Cmd`+`Enter`). A new session opens with the
 edited prompt already running; everything before that message is carried over,
 and the old answer and everything after it are gone from the new history.
 
-**Retry a turn.** Under each completed turn, *Retry* re-asks the turn's own
-prompt on a history without that turn.
-
-**Branch a turn.** *Branch* forks a session that keeps the turn. The shipped
-footer branch icon disables itself once later turns exist; this one does not, so
-you can branch from the middle of a long conversation.
+**Retry a turn.** The retry button sits in the assistant message's own action
+strip, next to copy and branch, and uses the same 28px geometry, tertiary
+colour, and hover treatment as the shipped buttons. It re-asks the turn's prompt
+on a history without that turn.
 
 The child session inherits the title with an incremented suffix, so branches of
 the same conversation stay recognisable in the sidebar.
@@ -70,14 +69,14 @@ the same conversation stay recognisable in the sidebar.
   Its selector elects the entry only for rows whose durable message source
   carries a browser prompt identity (`source.rpcId`), so only messages you
   actually typed get the pencil; synthetic context injections do not.
+* `conversation.chat.assistant-actions` — the shipped action strip. The entry's
+  component renders inside it, so the retry button inherits the row's layout and
+  hover behaviour. It maps its `messageId` back to the owning turn through
+  `useChat` and that turn's `turn-tail` data.
 * `shell.overlay` — the frame-wide layer that hosts the single edit dialog. The
   open edit target lives in a small module-level store shared by both entries.
-* `conversation.chat.turnTail` — the per-turn extension point, rendered before a
-  completed turn's action row. It receives the turn location (including the
-  `turn/start` event and its sequence) and the turn's closing sequence.
 * `ctx.sessions.fork({ sessionId, atSeq })` — cuts an exact inclusive prefix.
-  Edit forks at `userMessage.seq - 1`; retry forks at `turnStart.seq - 1`;
-  branch forks at the turn's closing `seq`.
+  Edit forks at `userMessage.seq - 1`; retry forks at `turnStart.seq - 1`.
 * `ctx.sessions.using(childId, …)` → `SessionBinding.session.prompt([…], 'queue')`
   — sends the prompt into the child once its initial open settles.
 * `ctx.uiWorkspace.openSession(childId)` — retains the child as the main view
