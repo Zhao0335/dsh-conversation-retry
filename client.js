@@ -1,18 +1,19 @@
 /**
  * Browser half of the conversation-retry bundle.
  *
- * Adds three per-turn actions to every completed turn of the Chat view:
+ * Three actions, all built on the shipped fork primitive
+ * (`ctx.sessions.fork` cuts an exact inclusive event-sequence prefix) plus
+ * `SessionBinding.session.prompt` into the child:
  *
- *   Retry            fork the session just before the turn, then send the
- *                    turn's own prompt again — a real regeneration instead of
- *                    appending another message to the same history.
- *   Edit & resend    the same fork, but send an edited prompt.
- *   Branch           fork a new session that keeps this turn and everything
- *                    before it, so both endings stay explorable.
- *
- * Every action is built on the shipped primitives: `ctx.sessions.fork` cuts an
- * exact inclusive event-sequence prefix, and `SessionBinding.session.prompt`
- * sends the prompt into the child. No Host half is involved.
+ *   Edit (on your own message)
+ *       Rewrite a prompt you already sent and re-run from there. The child
+ *       keeps everything before that message, so the old answer and everything
+ *       after it are gone from its history — a branch, not an append.
+ *   Retry (on a completed turn)
+ *       Re-send that turn's prompt unchanged and let the model answer again.
+ *   Branch (on a completed turn)
+ *       Fork a new session that keeps the turn, for any turn — including older
+ *       ones the shipped footer branch icon disables once later turns exist.
  *
  * @module dsh-conversation-retry/client
  */
@@ -28,47 +29,52 @@ window.__ModuleLoader__.load({
     /** Reference source counted while this plugin drives a freshly forked child. */
     const SOURCE = 'conversationRetry'
 
+    /** Client root context, captured by `apply`. */
+    let client = null
+
     const en = {
-      'action.retry': 'Retry',
-      'action.retryTitle': 'Fork this session before the turn and ask the same prompt again',
-      'action.edit': 'Edit & resend',
-      'action.editTitle': 'Fork this session before the turn and send an edited prompt',
-      'action.branch': 'Branch',
-      'action.branchTitle': 'Fork a new session that keeps this turn',
-      'edit.title': 'Edit the prompt',
+      'edit.action': 'Edit',
+      'edit.actionTitle': 'Edit this message and re-run from here',
+      'edit.title': 'Edit your message',
+      'edit.hint': 'Sending forks a new session that keeps everything before this message. The original conversation is untouched.',
       'edit.send': 'Fork and send',
       'edit.cancel': 'Cancel',
-      'edit.hint': 'The new session keeps everything before this turn.',
-      'error.generic': 'Could not fork this session',
+      'retry.action': 'Retry',
+      'retry.actionTitle': 'Ask this turn again on a history without it',
+      'branch.action': 'Branch',
+      'branch.actionTitle': 'Fork a new session that keeps this turn',
       'error.noPrompt': 'This turn has no prompt to retry',
       'error.noTurn': 'This turn is not in the loaded history',
-      'error.rejected': 'The prompt was not accepted',
+      'error.empty': 'Write something first',
     }
 
     const zh = {
-      'action.retry': '重试',
-      'action.retryTitle': '在这一轮之前分叉出新会话，重新发送同样的提问',
-      'action.edit': '编辑重发',
-      'action.editTitle': '在这一轮之前分叉出新会话，发送修改后的提问',
-      'action.branch': '分支',
-      'action.branchTitle': '分叉出一个保留这一轮的新会话',
-      'edit.title': '编辑提问',
+      'edit.action': '编辑',
+      'edit.actionTitle': '编辑这条消息，从这里重新开始',
+      'edit.title': '编辑你的消息',
+      'edit.hint': '发送后会分叉出一个新会话，保留这条消息之前的全部内容；原来的对话不受影响。',
       'edit.send': '分叉并发送',
       'edit.cancel': '取消',
-      'edit.hint': '新会话会保留这一轮之前的全部内容。',
-      'error.generic': '分叉这个会话失败',
+      'retry.action': '重试',
+      'retry.actionTitle': '在一个不含这一轮的历史上重新提问',
+      'branch.action': '分支',
+      'branch.actionTitle': '分叉出一个保留这一轮的新会话',
       'error.noPrompt': '这一轮没有可以重试的提问',
       'error.noTurn': '这一轮不在已加载的历史里',
-      'error.rejected': '提问没有被接受',
+      'error.empty': '先写点内容',
+    }
+
+    const ICON_PATHS = {
+      edit: ['M10.6 2.6 13.4 5.4 6.2 12.6 2.9 13.1 3.4 9.8z'],
+      retry: ['M13.5 8a5.5 5.5 0 1 1-1.9-4.16', 'M13.6 2.2v3.1h-3.1'],
+      branch: ['M4 2.6v10.8', 'M4 6.4h3.9a3 3 0 0 1 3 3v4', 'M4 2.6a1.3 1.3 0 1 1 0 .01'],
     }
 
     const styles = {
       row: {
-        display: 'flex',
-        flexWrap: 'wrap',
+        display: 'inline-flex',
         alignItems: 'center',
         gap: '6px',
-        margin: '2px 0 6px',
       },
       button: {
         display: 'inline-flex',
@@ -84,31 +90,51 @@ window.__ModuleLoader__.load({
         fontSize: '12px',
         lineHeight: '18px',
         cursor: 'pointer',
-        transition: 'background-color .12s, color .12s, border-color .12s',
       },
-      buttonBusy: {
-        cursor: 'default',
-        opacity: 0.55,
+      buttonBusy: { cursor: 'default', opacity: 0.55 },
+      iconOnly: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '26px',
+        height: '26px',
+        padding: 0,
+        border: '0.5px solid transparent',
+        borderRadius: '8px',
+        background: 'transparent',
+        color: 'var(--dsw-alias-label-tertiary, var(--dsw-alias-label-secondary, inherit))',
+        cursor: 'pointer',
       },
-      icon: {
-        width: '13px',
-        height: '13px',
-        flex: 'none',
-        display: 'block',
+      icon: { width: '13px', height: '13px', flex: 'none', display: 'block' },
+      scrim: {
+        position: 'fixed',
+        inset: 0,
+        zIndex: 9999,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '24px',
+        background: 'rgba(0, 0, 0, 0.32)',
       },
-      panel: {
+      dialog: {
         boxSizing: 'border-box',
-        width: '100%',
+        width: 'min(560px, 100%)',
         display: 'flex',
         flexDirection: 'column',
-        gap: '6px',
-        margin: '2px 0 8px',
-        padding: '10px 12px',
+        gap: '10px',
+        padding: '16px',
         border: '0.5px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35))',
-        borderRadius: '10px',
-        background: 'var(--dsw-alias-bg-layer-1, transparent)',
+        borderRadius: '14px',
+        background: 'var(--dsw-alias-bg-overlay, var(--dsw-alias-bg-layer-1, #fff))',
+        boxShadow: '0 16px 48px rgba(0, 0, 0, 0.24)',
       },
-      panelTitle: {
+      title: {
+        fontSize: '14px',
+        lineHeight: '22px',
+        fontWeight: 600,
+        color: 'var(--dsw-alias-label-primary, inherit)',
+      },
+      caption: {
         fontSize: '12px',
         lineHeight: '18px',
         color: 'var(--dsw-alias-label-caption, var(--dsw-alias-label-secondary, inherit))',
@@ -116,39 +142,29 @@ window.__ModuleLoader__.load({
       textarea: {
         boxSizing: 'border-box',
         width: '100%',
-        minHeight: '72px',
-        maxHeight: '240px',
-        padding: '8px 10px',
+        minHeight: '132px',
+        maxHeight: '46vh',
+        padding: '10px 12px',
         border: '0.5px solid var(--dsw-alias-border-l2, rgba(128, 128, 128, 0.35))',
-        borderRadius: '8px',
+        borderRadius: '10px',
         background: 'var(--dsw-alias-bg-base, transparent)',
         color: 'var(--dsw-alias-label-primary, inherit)',
         font: 'inherit',
-        fontSize: '13px',
-        lineHeight: '20px',
+        fontSize: '14px',
+        lineHeight: '22px',
         resize: 'vertical',
       },
-      panelActions: {
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'flex-end',
-        gap: '6px',
-      },
+      actions: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px' },
       primary: {
         borderColor: 'transparent',
         background: 'var(--dsw-alias-brand-primary, #247bbf)',
         color: 'var(--dsw-alias-label-primary-foreground, #fff)',
       },
-      error: {
-        width: '100%',
-        fontSize: '12px',
-        lineHeight: '18px',
-        color: 'var(--dsw-alias-state-error-primary, #c0392b)',
-      },
+      error: { fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary, #c0392b)' },
     }
 
     /** One 13px stroked glyph, inheriting the button color. */
-    function icon(paths) {
+    function glyph(paths) {
       return h(
         'svg',
         {
@@ -168,16 +184,17 @@ window.__ModuleLoader__.load({
     }
 
     const ICONS = {
-      retry: icon(['M13.5 8a5.5 5.5 0 1 1-1.9-4.16', 'M13.6 2.2v3.1h-3.1']),
-      edit: icon(['M10.6 2.6 13.4 5.4 6.2 12.6 2.9 13.1 3.4 9.8z']),
-      branch: icon(['M4 2.2v11.6', 'M4 6.2h4.2a3 3 0 0 1 3 3v4.6', 'M4 2.2a1.4 1.4 0 1 1 0 0.01']),
+      edit: glyph(ICON_PATHS.edit),
+      retry: glyph(ICON_PATHS.retry),
+      branch: glyph(ICON_PATHS.branch),
     }
 
     // --- session log readers -------------------------------------------------
 
     /** Durable events of one retained Session, in sequence order. */
-    function eventsOf(ctx, sessionId) {
-      const binding = ctx.sessions.binding(sessionId)
+    function eventsOf(sessionId) {
+      if (client === null) return []
+      const binding = client.sessions.binding(sessionId)
       if (binding === undefined) return []
       const window = binding.eventSource.getSnapshot()
       const events = []
@@ -210,10 +227,31 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The prompt this turn was opened with: the first `user/message` event after
-     * its `turn/start`, before the first step or the turn's close.
+     * Locate one durable user message by the browser prompt identity its source
+     * carries, so an edit affordance can act on the exact message it decorates.
+     * @param sessionId - viewed session.
+     * @param rpcId - prompt identity from the message source.
+     * @returns the message sequence and text, when present in the loaded window.
      */
-    function promptTextFor(events, turnNumber) {
+    function userMessageOf(sessionId, rpcId) {
+      for (const event of eventsOf(sessionId)) {
+        if (event.type !== 'user/message') continue
+        const data = event.data
+        if (data === undefined || data === null) continue
+        const source = data.source
+        if (source === undefined || source === null || typeof source !== 'object') continue
+        if (source.rpcId !== rpcId) continue
+        return { seq: event.seq, text: textOfMessage(data) }
+      }
+      return undefined
+    }
+
+    /**
+     * The prompt a turn was opened with: the first `user/message` after its
+     * `turn/start`, before the first step or the turn's close.
+     */
+    function promptTextFor(sessionId, turnNumber) {
+      const events = eventsOf(sessionId)
       const start = turnStartOf(events, turnNumber)
       if (start === undefined) return ''
       const index = events.indexOf(start)
@@ -243,36 +281,31 @@ window.__ModuleLoader__.load({
 
     /**
      * Fork `sessionId` at an exact inclusive boundary and open the child.
-     * @param ctx - client root context.
      * @param sessionId - source session.
      * @param atSeq - last event sequence the child keeps.
      * @returns the catalogued child identity.
      */
-    async function forkChild(ctx, sessionId, atSeq) {
-      const childId = await ctx.sessions.fork({
+    async function forkChild(sessionId, atSeq) {
+      const childId = await client.sessions.fork({
         sessionId,
         ...(atSeq === undefined ? {} : { atSeq }),
         increaseTitle: true,
       })
       // Retains the child as the main view, so it outlives this call.
-      ctx.uiWorkspace.openSession(childId)
+      client.uiWorkspace.openSession(childId)
       return childId
     }
 
     /**
-     * Fork before a turn and send a prompt into the child, so the answer is
-     * regenerated on a history that does not contain the old turn.
-     * @param ctx - client root context.
+     * Fork before an event and send a prompt into the child, so the answer is
+     * produced on a history that does not contain the replaced turn.
      * @param sessionId - source session.
-     * @param turnNumber - turn to re-ask.
+     * @param atSeq - last event sequence the child keeps.
      * @param text - prompt text to send.
      */
-    async function forkAndPrompt(ctx, sessionId, turnNumber, text) {
-      const start = turnStartOf(eventsOf(ctx, sessionId), turnNumber)
-      if (start === undefined) throw new Error('turn-not-loaded')
-      const atSeq = Math.max(1, start.seq - 1)
-      const childId = await forkChild(ctx, sessionId, atSeq)
-      await ctx.sessions.using(childId, { source: SOURCE }, async (reference) => {
+    async function forkAndPrompt(sessionId, atSeq, text) {
+      const childId = await forkChild(sessionId, atSeq)
+      await client.sessions.using(childId, { source: SOURCE }, async (reference) => {
         await reference.ready
         const result = await reference.binding.session.prompt([{ type: 'text', text }], 'queue')
         if (result !== null && typeof result === 'object' && result.ok === false) {
@@ -282,30 +315,182 @@ window.__ModuleLoader__.load({
       return childId
     }
 
-    // --- component -----------------------------------------------------------
+    // --- shared edit state ---------------------------------------------------
+
+    /** Open edit target, or null. */
+    let editState = null
+    const editListeners = new Set()
+
+    /** Replace the open edit target and notify every mounted reader. */
+    function publishEdit(next) {
+      editState = next
+      for (const listener of editListeners) listener()
+    }
+
+    /** Subscribe to the shared edit target. */
+    function subscribeEdit(listener) {
+      editListeners.add(listener)
+      return () => {
+        editListeners.delete(listener)
+      }
+    }
+
+    /** Read the shared edit target, re-rendering on change. */
+    function useEditState() {
+      const [state, setState] = React.useState(editState)
+      React.useEffect(() => subscribeEdit(() => setState(editState)), [])
+      return state
+    }
+
+    // --- components ----------------------------------------------------------
+
+    /** Locale lookup with a bundled English fallback. */
+    function translatorOf(props) {
+      return (key) => {
+        if (typeof props.t === 'function') {
+          try {
+            const value = props.t(key)
+            if (typeof value === 'string' && value !== '' && value !== key) return value
+          } catch (failure) {
+            /* fall through to the bundled copy */
+          }
+        }
+        return en[key] !== undefined ? en[key] : key
+      }
+    }
 
     /**
-     * The per-turn action row, rendered before a completed turn's own actions.
-     * @param props - turn owner props, injected actions and the locale translator.
+     * The edit affordance pinned to one of your own messages.
+     * @param props - chain owner props plus the elected `matched` value.
+     */
+    function UserMessageEdit(props) {
+      const translate = translatorOf(props)
+      const sessionId = props.sessionId
+      const matched = props.matched
+      const rpcId = matched !== null && matched !== undefined ? matched.rpcId : undefined
+      if (sessionId === undefined || rpcId === undefined) return null
+
+      const target = userMessageOf(sessionId, rpcId)
+      if (target === undefined) return null
+
+      const open = () => {
+        publishEdit({ sessionId, seq: target.seq, draft: target.text, busy: false, error: null })
+      }
+
+      return h(
+        'button',
+        {
+          type: 'button',
+          title: translate('edit.actionTitle'),
+          'aria-label': translate('edit.actionTitle'),
+          onClick: open,
+          style: styles.iconOnly,
+        },
+        ICONS.edit,
+      )
+    }
+
+    /**
+     * The edit dialog, rendered once in the frame-wide overlay layer.
+     * @param props - locale translator.
+     */
+    function EditDialog(props) {
+      const translate = translatorOf(props)
+      const state = useEditState()
+      if (state === null) return null
+
+      const close = () => {
+        if (state.busy) return
+        publishEdit(null)
+      }
+
+      const patch = (next) => publishEdit({ ...state, ...next })
+
+      const submit = async () => {
+        const text = state.draft.trim()
+        if (text === '') {
+          patch({ error: translate('error.empty') })
+          return
+        }
+        patch({ busy: true, error: null })
+        try {
+          await forkAndPrompt(state.sessionId, Math.max(1, state.seq - 1), text)
+          publishEdit(null)
+        } catch (failure) {
+          patch({ busy: false, error: describeError(failure) })
+        }
+      }
+
+      return h(
+        'div',
+        {
+          style: styles.scrim,
+          onMouseDown: (event) => {
+            if (event.target === event.currentTarget) close()
+          },
+        },
+        h(
+          'div',
+          { style: styles.dialog, role: 'dialog', 'aria-modal': 'true', 'aria-label': translate('edit.title') },
+          h('div', { style: styles.title }, translate('edit.title')),
+          h('textarea', {
+            style: styles.textarea,
+            value: state.draft,
+            autoFocus: true,
+            'aria-label': translate('edit.title'),
+            onChange: (event) => patch({ draft: event.target.value, error: null }),
+            onKeyDown: (event) => {
+              if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault()
+                submit()
+              }
+              if (event.key === 'Escape') {
+                event.preventDefault()
+                close()
+              }
+            },
+          }),
+          h('div', { style: styles.caption }, translate('edit.hint')),
+          state.error === null ? null : h('div', { style: styles.error, role: 'status' }, state.error),
+          h(
+            'div',
+            { style: styles.actions },
+            h(
+              'button',
+              { type: 'button', onClick: close, disabled: state.busy === true, style: styles.button },
+              translate('edit.cancel'),
+            ),
+            h(
+              'button',
+              {
+                type: 'button',
+                onClick: submit,
+                disabled: state.busy === true || state.draft.trim() === '',
+                style: { ...styles.button, ...styles.primary, ...(state.busy === true ? styles.buttonBusy : {}) },
+              },
+              translate('edit.send'),
+            ),
+          ),
+        ),
+      )
+    }
+
+    /**
+     * Retry and branch actions for one completed turn.
+     * @param props - turn owner props and the standard `sessionId`.
      */
     function TurnActions(props) {
-      const t = typeof props.t === 'function' ? props.t : (key) => (en[key] !== undefined ? en[key] : key)
-      const turn = props.turn
-      const seq = props.seq
+      const translate = translatorOf(props)
       const [busy, setBusy] = React.useState(false)
-      const [editing, setEditing] = React.useState(false)
-      const [draft, setDraft] = React.useState('')
       const [error, setError] = React.useState(null)
 
+      const sessionId = props.sessionId
+      const turn = props.turn
+      const seq = props.seq
       const turnNumber = turn !== undefined && turn !== null && typeof turn.turn === 'number' ? turn.turn : undefined
       const startSeq = turn !== undefined && turn !== null && turn.start !== undefined ? turn.start.seq : undefined
-      const canRetry =
-        turnNumber !== undefined &&
-        typeof startSeq === 'number' &&
-        startSeq > 1 &&
-        typeof props.promptOf === 'function' &&
-        typeof props.retry === 'function'
-      const canBranch = typeof seq === 'number' && seq > 0 && typeof props.branch === 'function'
+      const canRetry = sessionId !== undefined && turnNumber !== undefined && typeof startSeq === 'number' && startSeq > 1
+      const canBranch = sessionId !== undefined && typeof seq === 'number' && seq > 0
 
       if (!canRetry && !canBranch) return null
 
@@ -314,7 +499,6 @@ window.__ModuleLoader__.load({
         setError(null)
         try {
           await operation()
-          setEditing(false)
         } catch (failure) {
           setError(describeError(failure))
         } finally {
@@ -323,29 +507,17 @@ window.__ModuleLoader__.load({
       }
 
       const onRetry = () => {
-        const text = props.promptOf(turnNumber)
+        const text = promptTextFor(sessionId, turnNumber)
         if (text === '') {
-          setError(t('error.noPrompt'))
+          setError(translate('error.noPrompt'))
           return
         }
-        run(() => props.retry(turnNumber, text))
+        run(() => forkAndPrompt(sessionId, Math.max(1, startSeq - 1), text))
       }
 
-      const onStartEdit = () => {
-        setError(null)
-        setDraft(props.promptOf(turnNumber))
-        setEditing(true)
-      }
+      const onBranch = () => run(() => forkChild(sessionId, seq))
 
-      const onSubmitEdit = () => {
-        const text = draft.trim()
-        if (text === '') return
-        run(() => props.retry(turnNumber, text))
-      }
-
-      const onBranch = () => run(() => props.branch(seq))
-
-      const button = (key, label, title, glyph, onClick, disabled) =>
+      const button = (key, label, title, icon, onClick) =>
         h(
           'button',
           {
@@ -354,92 +526,83 @@ window.__ModuleLoader__.load({
             title,
             'aria-label': title,
             onClick,
-            disabled: disabled === true,
-            style: disabled === true ? { ...styles.button, ...styles.buttonBusy } : styles.button,
+            disabled: busy,
+            style: busy ? { ...styles.button, ...styles.buttonBusy } : styles.button,
           },
-          glyph,
+          icon,
           h('span', null, label),
         )
 
-      const children = []
-      if (canRetry) {
-        children.push(button('retry', t('action.retry'), t('action.retryTitle'), ICONS.retry, onRetry, busy))
-        children.push(button('edit', t('action.edit'), t('action.editTitle'), ICONS.edit, onStartEdit, busy))
-      }
-      if (canBranch) {
-        children.push(button('branch', t('action.branch'), t('action.branchTitle'), ICONS.branch, onBranch, busy))
-      }
+      const buttons = []
+      if (canRetry) buttons.push(button('retry', translate('retry.action'), translate('retry.actionTitle'), ICONS.retry, onRetry))
+      if (canBranch) buttons.push(button('branch', translate('branch.action'), translate('branch.actionTitle'), ICONS.branch, onBranch))
 
-      const rows = [h('div', { key: 'row', style: styles.row }, children)]
-
-      if (editing) {
-        rows.push(
-          h(
-            'div',
-            { key: 'panel', style: styles.panel },
-            h('div', { style: styles.panelTitle }, t('edit.title')),
-            h('textarea', {
-              style: styles.textarea,
-              value: draft,
-              rows: 3,
-              'aria-label': t('edit.title'),
-              onChange: (event) => setDraft(event.target.value),
-              onKeyDown: (event) => {
-                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-                  event.preventDefault()
-                  onSubmitEdit()
-                }
-                if (event.key === 'Escape') {
-                  event.preventDefault()
-                  setEditing(false)
-                }
-              },
-            }),
-            h('div', { style: styles.panelTitle }, t('edit.hint')),
-            h(
-              'div',
-              { style: styles.panelActions },
-              h(
-                'button',
-                {
-                  type: 'button',
-                  onClick: () => setEditing(false),
-                  disabled: busy,
-                  style: styles.button,
-                },
-                t('edit.cancel'),
-              ),
-              h(
-                'button',
-                {
-                  type: 'button',
-                  onClick: onSubmitEdit,
-                  disabled: busy || draft.trim() === '',
-                  style: { ...styles.button, ...styles.primary, ...(busy ? styles.buttonBusy : {}) },
-                },
-                t('edit.send'),
-              ),
-            ),
-          ),
-        )
-      }
-
-      if (error !== null) {
-        rows.push(h('div', { key: 'error', style: styles.error, role: 'status' }, error))
-      }
-
-      return h(React.Fragment, null, rows)
+      return h(
+        React.Fragment,
+        null,
+        h('div', { style: { ...styles.row, margin: '2px 0 6px' } }, buttons),
+        error === null ? null : h('div', { style: { ...styles.error, marginBottom: '6px' }, role: 'status' }, error),
+      )
     }
 
     // --- plugin --------------------------------------------------------------
 
     /**
-     * Client plugin body: dictionaries plus the per-turn action entry.
+     * Client plugin body: dictionaries, the message edit affordance, the edit
+     * dialog, and the per-turn retry/branch actions.
      * @param ctx - client root context.
      */
     function apply(ctx) {
+      client = ctx
       ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'conversation-retry: dictionaries')
 
+      // Presence marker: lets an operator confirm this module is live in the
+      // page without touching the UI. Guarded because a hot-replaced generation
+      // may still hold the name.
+      try {
+        ctx.provide('conversationRetry', {
+          version: '0.2.0',
+          openEdit: (sessionId, seq, draft) => publishEdit({ sessionId, seq, draft, busy: false, error: null }),
+        })
+      } catch (conflict) {
+        /* an earlier generation of this plugin still owns the name */
+      }
+
+      // Edit affordance on your own messages: the chain elects it only for user
+      // rows whose source carries a browser prompt identity.
+      ctx.slots.inject('conversation.chat.user.before', () =>
+        ctx.slots.register(
+          {
+            name: 'conversation.chat.user.before',
+            id: 'conversation-retry-edit',
+            order: 10,
+            locale: NS,
+            select: (owner) => {
+              if (owner === undefined || owner === null || owner.kind !== 'user') return null
+              const source = owner.source
+              if (source === null || typeof source !== 'object') return null
+              const rpcId = source.rpcId
+              return typeof rpcId === 'string' && rpcId !== '' ? { rpcId } : null
+            },
+          },
+          UserMessageEdit,
+        ),
+      )
+
+      // One frame-wide dialog; the edit target lives in the shared store above.
+      ctx.slots.inject('shell.overlay', () =>
+        ctx.slots.register(
+          {
+            name: 'shell.overlay',
+            id: 'conversation-retry-dialog',
+            order: 60,
+            locale: NS,
+          },
+          EditDialog,
+        ),
+      )
+
+      // Retry and branch on every completed turn.
       ctx.slots.inject('conversation.chat.turnTail', () =>
         ctx.slots.register(
           {
@@ -447,11 +610,6 @@ window.__ModuleLoader__.load({
             id: 'conversation-retry',
             order: 20,
             locale: NS,
-            inject: (sessionId) => ({
-              promptOf: (turnNumber) => promptTextFor(eventsOf(ctx, sessionId), turnNumber),
-              retry: (turnNumber, text) => forkAndPrompt(ctx, sessionId, turnNumber, text),
-              branch: (atSeq) => forkChild(ctx, sessionId, atSeq),
-            }),
           },
           TurnActions,
         ),

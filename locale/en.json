@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Retry and branch",
-    "description": "Retry a turn, edit the prompt and resend, or branch a new session from any completed turn in Chat."
+    "title": "Edit, retry and branch",
+    "description": "Edit a message you already sent and re-run from there, retry a turn, or branch a new session from any completed turn in Chat."
   }
 }
