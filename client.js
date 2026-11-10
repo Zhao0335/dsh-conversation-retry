@@ -89,18 +89,24 @@ window.__ModuleLoader__.load({
 /**
  * The user row stacks its children in a column: the message-source seat, the
  * bubble, then the shipped action row. The chain slot only offers the first
- * seat, so the control is taken out of flow and the action row reserves the
- * space it occupies — the pencil then shares the copy icon's line instead of
- * becoming another stacked row.
+ * seat, and every slot render sits in a `display: contents` wrapper, so the row
+ * is reached through that wrapper's stable `data-slot` attribute. The control
+ * then leaves the column flow and the action row reserves its space, putting
+ * the pencil on the copy icon's line.
+ *
+ * The absolute placement lives inside the `:has()` rule on purpose: without a
+ * matching row the control stays an ordinary flex item — visible on its own
+ * line — instead of anchoring to the viewport.
  */
-:has(> .dsh-conversation-retry-edit){position:relative}
-:has(> .dsh-conversation-retry-edit) > :last-child{
+:has(> [data-slot="conversation.chat.user.before"]){position:relative}
+:has(> [data-slot="conversation.chat.user.before"]) > :last-child{
   padding-right:calc(28px + var(--dsh-content-font-delta,0px) + 8px);
 }
-.dsh-conversation-retry-edit{
+:has(> [data-slot="conversation.chat.user.before"]) .dsh-conversation-retry-edit{
   position:absolute;
   right:0;
   bottom:0;
+  z-index:1;
 }
 `
 
