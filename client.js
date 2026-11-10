@@ -89,12 +89,12 @@ window.__ModuleLoader__.load({
 /**
  * The user row stacks its children in a column: the message-source seat, the
  * bubble, then the shipped action row. The chain slot only offers the first
- * seat, and every slot render sits in a `display: contents` wrapper, so the row
- * is reached through that wrapper's stable `data-slot` attribute. The control
- * then leaves the column flow and the action row reserves its space, putting
- * the pencil on the copy icon's line.
+ * seat, and every slot render sits in a display:contents wrapper, so the row is
+ * reached through that wrapper's stable data-slot attribute. The control then
+ * leaves the column flow and the action row reserves its space, putting the
+ * pencil on the copy icon's line.
  *
- * The absolute placement lives inside the `:has()` rule on purpose: without a
+ * The absolute placement lives inside the :has() rule on purpose: without a
  * matching row the control stays an ordinary flex item — visible on its own
  * line — instead of anchoring to the viewport.
  */
