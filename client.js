@@ -556,18 +556,6 @@ window.__ModuleLoader__.load({
       client = ctx
       ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'conversation-retry: dictionaries')
 
-      // Presence marker: lets an operator confirm this module is live in the
-      // page without touching the UI. Guarded because a hot-replaced generation
-      // may still hold the name.
-      try {
-        ctx.provide('conversationRetry', {
-          version: '0.2.0',
-          openEdit: (sessionId, seq, draft) => publishEdit({ sessionId, seq, draft, busy: false, error: null }),
-        })
-      } catch (conflict) {
-        /* an earlier generation of this plugin still owns the name */
-      }
-
       // Edit affordance on your own messages: the chain elects it only for user
       // rows whose source carries a browser prompt identity.
       ctx.slots.inject('conversation.chat.user.before', () =>
