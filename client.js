@@ -89,9 +89,19 @@ window.__ModuleLoader__.load({
 /**
  * The user row stacks its children in a column: the message-source seat, the
  * bubble, then the shipped action row. The chain slot only offers the first
- * seat, so reorder this control after the action row to sit under the bubble.
+ * seat, so the control is taken out of flow and the action row reserves the
+ * space it occupies — the pencil then shares the copy icon's line instead of
+ * becoming another stacked row.
  */
-.dsh-conversation-retry-edit{order:1}
+:has(> .dsh-conversation-retry-edit){position:relative}
+:has(> .dsh-conversation-retry-edit) > :last-child{
+  padding-right:calc(28px + var(--dsh-content-font-delta,0px) + 8px);
+}
+.dsh-conversation-retry-edit{
+  position:absolute;
+  right:0;
+  bottom:0;
+}
 `
 
     const styles = {
