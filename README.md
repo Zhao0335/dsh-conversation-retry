@@ -69,6 +69,12 @@ the same conversation stay recognisable in the sidebar.
   Its selector elects the entry only for rows whose durable message source
   carries a browser prompt identity (`source.rpcId`), so only messages you
   actually typed get the pencil; synthetic context injections do not.
+  Placement needs one subtlety: the user row stacks its children in a column
+  (message-source seat, bubble, action row), and every slot render sits in a
+  `display: contents` wrapper. The row is therefore reached through that
+  wrapper's stable `data-slot` attribute, the control leaves the column flow,
+  and the shipped action row reserves its width — which is what puts the pencil
+  on the copy icon's line instead of on a row of its own.
 * `conversation.chat.assistant-actions` — the shipped action strip. The entry's
   component renders inside it, so the retry button inherits the row's layout and
   hover behaviour. It maps its `messageId` back to the owning turn through
