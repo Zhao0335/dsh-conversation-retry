@@ -205,6 +205,12 @@ window.__ModuleLoader__.load({
 
     // --- session log readers -------------------------------------------------
 
+    /** Shared empty index, so a session without a live binding allocates nothing. */
+    const EMPTY_PROMPT_INDEX = new Map()
+
+    /** Per-session editable-prompt index, rebuilt when the event window revision moves. */
+    const promptIndexCache = new Map()
+
     /** Durable events of one retained Session, in sequence order. */
     function eventsOf(sessionId) {
       if (client === null) return []
@@ -235,21 +241,42 @@ window.__ModuleLoader__.load({
     /**
      * Locate one durable user message by the browser prompt identity its source
      * carries, so an edit affordance acts on the exact message it decorates.
+     *
+     * The index is rebuilt once per published event-window revision and shared
+     * by every user row in that window: scanning the log per row would make a
+     * long conversation quadratic in its own history.
      * @param sessionId - viewed session.
-     * @param rpcId - prompt identity from the message source.
-     * @returns the message sequence and text, when present in the loaded window.
+     * @returns prompt identity to message sequence and text.
      */
-    function userMessageOf(sessionId, rpcId) {
-      for (const event of eventsOf(sessionId)) {
-        if (event.type !== 'user/message') continue
+    function promptIndexOf(sessionId) {
+      if (client === null) return EMPTY_PROMPT_INDEX
+      const binding = client.sessions.binding(sessionId)
+      if (binding === undefined) return EMPTY_PROMPT_INDEX
+      const window = binding.eventSource.getSnapshot()
+      const cached = promptIndexCache.get(sessionId)
+      if (cached !== undefined && cached.revision === window.revision) return cached.index
+      const index = new Map()
+      for (const entry of window.entries) {
+        if (entry === null || typeof entry !== 'object' || entry.type !== 'event') continue
+        const event = entry.event
+        if (event === undefined || event === null || event.type !== 'user/message') continue
         const data = event.data
         if (data === undefined || data === null) continue
         const source = data.source
         if (source === undefined || source === null || typeof source !== 'object') continue
-        if (source.rpcId !== rpcId) continue
-        return { seq: event.seq, text: textOfMessage(data) }
+        const rpcId = source.rpcId
+        if (typeof rpcId !== 'string' || rpcId === '') continue
+        if (index.has(rpcId)) continue
+        index.set(rpcId, { seq: event.seq, text: textOfMessage(data) })
       }
-      return undefined
+      if (promptIndexCache.size > 32) promptIndexCache.clear()
+      promptIndexCache.set(sessionId, { revision: window.revision, index })
+      return index
+    }
+
+    /** One editable prompt, or undefined when this message is not in the window. */
+    function userMessageOf(sessionId, rpcId) {
+      return promptIndexOf(sessionId).get(rpcId)
     }
 
     /**
@@ -379,7 +406,15 @@ window.__ModuleLoader__.load({
           className: `${ACTION_CLASS} dsh-conversation-retry-edit`,
           title: label,
           'aria-label': label,
-          onClick: () => publishEdit({ sessionId, seq: target.seq, draft: target.text, busy: false, error: null }),
+          onClick: () =>
+            publishEdit({
+              sessionId,
+              seq: target.seq,
+              draft: target.text,
+              busy: false,
+              error: null,
+              returnFocus: document.activeElement,
+            }),
         },
         ICON_EDIT,
       )
@@ -463,6 +498,31 @@ window.__ModuleLoader__.load({
     function EditDialog(props) {
       const translate = translatorOf(props)
       const state = useEditState()
+      const open = state !== null
+
+      // Escape closes from anywhere in the dialog, including a focused button,
+      // and the element that opened it gets focus back on close. The opener is
+      // captured when the dialog opens, because the shared state is already
+      // null by the time the cleanup runs.
+      const returnFocusRef = React.useRef(null)
+      React.useEffect(() => {
+        if (!open) return undefined
+        returnFocusRef.current = editState === null ? null : editState.returnFocus
+        const onKeyDown = (event) => {
+          if (event.key !== 'Escape') return
+          if (editState === null || editState.busy === true) return
+          event.preventDefault()
+          publishEdit(null)
+        }
+        document.addEventListener('keydown', onKeyDown)
+        return () => {
+          document.removeEventListener('keydown', onKeyDown)
+          const previous = returnFocusRef.current
+          returnFocusRef.current = null
+          if (previous !== null && previous !== undefined && typeof previous.focus === 'function') previous.focus()
+        }
+      }, [open])
+
       if (state === null) return null
 
       const close = () => {
@@ -560,6 +620,13 @@ window.__ModuleLoader__.load({
       }, 'conversation-retry: stylesheet')
 
       ctx.effect(() => ctx.locale.register(NS, { en, zh }), 'conversation-retry: dictionaries')
+
+      ctx.effect(
+        () => () => {
+          promptIndexCache.clear()
+        },
+        'conversation-retry: prompt index',
+      )
 
       // Edit affordance on your own messages: the chain elects it only for user
       // rows whose durable source carries a browser prompt identity.

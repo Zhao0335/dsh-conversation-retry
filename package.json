@@ -1,19 +1,28 @@
 {
   "name": "dsh-conversation-retry",
-  "version": "0.3.4",
-  "private": true,
+  "version": "0.4.0",
   "type": "module",
-  "description": "Retry a turn, edit the prompt and resend, or branch a new session from any completed turn in the DeepSeek Harness Web UI.",
+  "description": "Edit a message you already sent and re-run from there, or retry a turn, in the DeepSeek Harness Web UI.",
   "keywords": [
     "dsh",
+    "dsh-plugin",
     "deepseek-harness",
     "plugin",
     "retry",
     "regenerate",
+    "edit-message",
     "branch",
     "fork"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Zhao0335/dsh-conversation-retry.git"
+  },
+  "homepage": "https://github.com/Zhao0335/dsh-conversation-retry#readme",
+  "bugs": {
+    "url": "https://github.com/Zhao0335/dsh-conversation-retry/issues"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -26,6 +35,8 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
+    "assets/*.png",
+    "scripts/*.mjs",
     "README.md",
     "LICENSE"
   ],

@@ -1,5 +1,7 @@
 # dsh-conversation-retry
 
+<img src="assets/icon-180.png" width="72" height="72" alt="">
+
 Edit a message you already sent and re-run from there — plus retry a turn — in
 the [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) Web UI.
 
@@ -34,14 +36,17 @@ there if you want it back.
 
 ## Install
 
-The plugin is a local Harness bundle. From a checkout of this repository:
+```sh
+dsh plugin --profile web add github:Zhao0335/dsh-conversation-retry
+```
+
+Then reload the Web UI once so the browser picks up the new client module.
+
+To install from a local checkout instead, point the Harness at the directory:
 
 ```
 plugin_manager install_bundle  target: <absolute path to this directory>
 ```
-
-After installing, reload the Web UI once so the browser picks up the new client
-module.
 
 Requirements: a Harness build that exposes `ctx.sessions.fork` with an `atSeq`
 boundary, the `conversation.chat.user.before` chain slot, and the
@@ -79,6 +84,10 @@ the same conversation stay recognisable in the sidebar.
   component renders inside it, so the retry button inherits the row's layout and
   hover behaviour. It maps its `messageId` back to the owning turn through
   `useChat` and that turn's `turn-tail` data.
+* The edit affordance resolves its message through a per-session index of
+  `rpcId` → sequence and text, rebuilt only when the published event-window
+  revision moves. Scanning the log once per rendered row would make a long
+  conversation quadratic in its own history.
 * `shell.overlay` — the frame-wide layer that hosts the single edit dialog. The
   open edit target lives in a small module-level store shared by both entries.
 * `ctx.sessions.fork({ sessionId, atSeq })` — cuts an exact inclusive prefix.
